@@ -44,13 +44,15 @@ class Myganomaly():
 
         print(f">> Training {self.name} on {opt.dataset} to detect {opt.abnormal_class}")
         best_auc = 0
+        loss_d = []
+        loss_g = []
         for epoch in range(opt.nepoch):
             iternum = 0
             running_loss_g = 0.0
             running_loss_d = 0.0
             self.netd.train()
             self.netg.train()
-            for data in tqdm(self.dataloader.train, leave=False, total=len(self.dataloader.train), ncols=80):
+            for i, data in enumerate(tqdm(self.dataloader.train, leave=False, total=len(self.dataloader.train), ncols=80)):
                 iternum = iternum + 1
                 inputdata = data[0].to(self.device)
                 fake, latent_i, latent_o = self.netg(inputdata)
@@ -79,25 +81,33 @@ class Myganomaly():
                 running_loss_d += err_d.item()
                 running_loss_g += err_g.item()
                 if iternum % opt.loss_iter == 0:
-                    print('GLoss: {:.8f} DLoss: {:.8f}'
-                          .format(running_loss_g / opt.loss_iter, running_loss_d / opt.loss_iter))
+                    # print('GLoss: {:.8f} DLoss: {:.8f}'
+                    #       .format(running_loss_g / opt.loss_iter, running_loss_d / opt.loss_iter))
+                    loss_d.append(running_loss_d / opt.loss_iter)
+                    loss_g.append(running_loss_g / opt.loss_iter)
                     running_loss_d = 0
                     running_loss_g = 0
-            print(">> Training model %s. Epoch %d/%d" % (self.name, epoch + 1, opt.niter))
 
-            if opt.save_train_images:
-                train_img_dst = os.path.join(self.opt.outfolder, self.opt.name, self.opt.abnormal_class, 'train', 'images')
-                if not os.path.isdir(train_img_dst):
-                    os.makedirs(train_img_dst)
-                visualize.save_images(train_img_dst, epoch, inputdata, fake)
+                if opt.save_train_images and i == 0:
+                    train_img_dst = os.path.join(opt.outtrain_dir, 'images')
+                    visualize.save_images(train_img_dst, epoch, inputdata, fake)
+            print(">> Training model %s. Epoch %d/%d" % (self.name, epoch + 1, opt.nepoch))
 
             if epoch % opt.eva_epoch == 0:
-                res = self.evaluate(epoch)
-                if res['AUC'] > best_auc:
-                    best_auc = res['AUC']
+                performance = self.evaluate(epoch)
+                if performance['AUC'] > best_auc:
+                    best_auc = performance['AUC']
                     if opt.save_best_weight:
                         self.save_weights(epoch, is_best=True)
-
+                # log performance
+                now = time.strftime("%c")
+                traintime = f'================ {now} ================\n'
+                visualize.write_to_log_file(os.path.join(opt.outclass_dir, 'auc.log'), traintime)
+                visualize.log_current_performance(opt.outclass_dir, performance, best_auc)
+                print(performance)
+        if opt.save_loss_curve:
+            visualize.plot_loss_curve(opt.outclass_dir, 'loss_d', loss_d)
+            visualize.plot_loss_curve(opt.outclass_dir, 'loss_g', loss_g)
         if opt.save_final_weight:
             self.save_weights(opt.nepoch, is_best=False)
         print(">> Training model %s.[Done]" % self.name)
@@ -127,23 +137,31 @@ class Myganomaly():
                     error.size(0))
                 gt_labels[i * self.opt.batchsize: i * self.opt.batchsize + error.size(0)] = label.reshape(
                     error.size(0))
+
+                if self.opt.save_test_images and i == 0:
+                    test_img_dst = os.path.join(self.opt.outfolder, self.opt.name, self.opt.abnormal_class, 'test',
+                                                'images')
+                    visualize.save_images(test_img_dst, epoch, inputdata, fake)
+
+                if self.opt.visulize_feature and i == 0:
+                    feature_img_dst = os.path.join(self.opt.outtrain_dir, 'features')
+                    visualize.tsne_3D(feature_img_dst, epoch, 'feature',
+                                      feat_real.reshape(feat_real.size(0), -1).cpu().numpy(),
+                                      label.reshape(label.size(0), -1).cpu().numpy())
+                    visualize.tsne_2D(feature_img_dst, epoch, 'feature',
+                                      feat_real.reshape(feat_real.size(0), -1).cpu().numpy(),
+                                      label.reshape(label.size(0), -1).cpu().numpy())
+
                 times.append(time_o - time_i)
 
             times = np.array(times)
             times = np.mean(times[:100] * 1000)
 
-            if self.opt.save_test_images:
-                test_img_dst = os.path.join(self.opt.outfolder, self.opt.name, self.opt.abnormal_class, 'test',
-                                             'images')
-                if not os.path.isdir(test_img_dst):
-                    os.makedirs(test_img_dst)
-                visualize.save_images(test_img_dst, epoch, inputdata, fake)
             # Scale error vector between [0, 1]
             an_scores = (an_scores - torch.min(an_scores)) / (
                         torch.max(an_scores) - torch.min(an_scores))
             auc = evaluate(gt_labels, an_scores, metric=self.opt.metric)
             performance = OrderedDict([('Avg Run Time (ms/batch)', times), ('AUC', auc)])
-            print(performance)
             return performance
 
     def save_weights(self, epoch: int, is_best: bool = False):
@@ -152,7 +170,7 @@ class Myganomaly():
             :param epoch: current epoch of model weights
             :param is_best: whether the best model weights
         """
-        weight_dir = os.path.join(self.opt.outfolder, self.opt.name, self.opt.abnormal_class, 'train', 'weights')
+        weight_dir = os.path.join(self.opt.outtrain_dir, 'weights')
         if not os.path.exists(weight_dir):
             os.makedirs(weight_dir)
         if is_best:
@@ -163,17 +181,21 @@ class Myganomaly():
             torch.save({'epoch': epoch, 'state_dict': self.netg.state_dict()}, f"{weight_dir}/netG_final.pth")
 
     def load_weights(self):
+        weight_dir = os.path.join(self.opt.outtrain_dir, 'weights')
         if self.opt.load_best_weights:
-            weight_g_path = f"{self.opt.outfolder}/{self.name}/{self.opt.dataset}/" \
-                            f"{self.opt.abnormal_class}/train/weights/netG_best.pth"
-            weight_d_path = f"{self.opt.outfolder}/{self.name}/{self.opt.dataset}/" \
-                            f"{self.opt.abnormal_class}/train/weights/netD_best.pth"
+            weight_g_path = f'{weight_dir}/netG_best.pth'
+            # weight_g_path = f"{self.opt.outfolder}/{self.name}/{self.opt.dataset}/" \
+            #                 f"{self.opt.abnormal_class}/train/weights/netG_best.pth"
+            weight_d_path = f'{weight_dir}/netD_best.pth'
+            # weight_d_path = f"{self.opt.outfolder}/{self.name}/{self.opt.dataset}/" \
+            #                 f"{self.opt.abnormal_class}/train/weights/netD_best.pth"
         if self.opt.load_final_weights:
-            weight_g_path = f"{self.opt.outfolder}/{self.name}/{self.opt.dataset}/" \
-                            f"{self.opt.abnormal_class}/train/weights/netG_final.pth"
-            weight_d_path = f"{self.opt.outfolder}/{self.name}/{self.opt.dataset}/" \
-                            f"{self.opt.abnormal_class}/train/weights/netD_final.pth"
-
+            weight_g_path = f'{weight_dir}/netG_final.pth'
+            # weight_g_path = f"{self.opt.outfolder}/{self.name}/{self.opt.dataset}/" \
+            #                 f"{self.opt.abnormal_class}/train/weights/netG_final.pth"
+            weight_d_path = f'{weight_dir}/netD_final.pth'
+            # weight_d_path = f"{self.opt.outfolder}/{self.name}/{self.opt.dataset}/" \
+            #                 f"{self.opt.abnormal_class}/train/weights/netD_final.pth"
         print('>> Loading weights...')
         weights_g = torch.load(weight_g_path)['state_dict']
         weights_d = torch.load(weight_d_path)['state_dict']

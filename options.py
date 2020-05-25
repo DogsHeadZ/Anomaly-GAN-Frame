@@ -10,7 +10,7 @@ import argparse
 import os
 import torch
 import time
-
+import visualize
 # pylint: disable=C0103,C0301,R0903,W0622
 
 class Options():
@@ -59,7 +59,7 @@ class Options():
         self.parser.add_argument('--print_freq', type=int, default=100, help='frequency of showing training results on console')
         self.parser.add_argument('--eva_epoch', type=int, default=1,
                                  help='the epoch of evaluation')
-        self.parser.add_argument('--loss_iter', type=int, default=100,
+        self.parser.add_argument('--loss_iter', type=int, default=5,
                                  help='the iteration of saving loss')
         self.parser.add_argument('--nepoch', type=int, default=15, help='number of epochs to train for')
         self.parser.add_argument('--save_best_weight', action='store_false', help='save the weights of the best model')
@@ -68,6 +68,8 @@ class Options():
         self.parser.add_argument('--load_final_weights', action='store_true', help='Load the pretrained final weights')
         self.parser.add_argument('--save_train_images', action='store_false', help='save train images')
         self.parser.add_argument('--save_test_images', action='store_false', help='Save test images')
+        self.parser.add_argument('--visulize_feature', action='store_false', help='visulize features')
+        self.parser.add_argument('--save_loss_curve', action='store_false', help='Save loss curve in training')
 
 
 
@@ -120,16 +122,18 @@ class Options():
         # save to the disk
         if opt.name == 'experiment_name':
             opt.name = "%s/%s" % (opt.model, opt.dataset)
-        outtrain_dir = os.path.join(opt.outfolder, opt.name, opt.abnormal_class, 'train')
-        outtest_dir = os.path.join(opt.outfolder, opt.name, opt.abnormal_class, 'test')
 
-        if not os.path.isdir(outtrain_dir):
-            os.makedirs(outtrain_dir)
-        if not os.path.isdir(outtest_dir):
-            os.makedirs(outtest_dir)
+        opt.outclass_dir = os.path.join(opt.outfolder, opt.name, opt.abnormal_class)
+        opt.outtrain_dir = os.path.join(opt.outfolder, opt.name, opt.abnormal_class, 'train')
+        opt.outtest_dir = os.path.join(opt.outfolder, opt.name, opt.abnormal_class, 'test')
 
-        file_name = os.path.join(outtrain_dir, 'opt.txt')
-        with open(file_name, 'a+') as opt_file:
+        if not os.path.isdir(opt.outtrain_dir):
+            os.makedirs(opt.outtrain_dir)
+        if not os.path.isdir(opt.outtest_dir):
+            os.makedirs(opt.outtest_dir)
+
+        file_name = os.path.join(opt.outclass_dir, 'opt.txt')
+        with open(file_name, 'a') as opt_file:
             opt_file.write('------------ Options -------------\n')
             opt_file.write(traintime)
             for k, v in sorted(args.items()):
