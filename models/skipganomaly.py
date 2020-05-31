@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 
 from models.networks import NetD, weights_init, define_G, define_D, get_scheduler
 from visualizer import Visualizer
-from loss import l2_loss
+from losses import l2_loss
 from evaluate import roc
 from models.basemodel import BaseModel
 

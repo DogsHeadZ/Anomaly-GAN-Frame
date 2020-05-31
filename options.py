@@ -35,7 +35,7 @@ class Options():
         self.parser.add_argument('--droplast', action='store_true', default=True, help='Drop last batch size.')
         self.parser.add_argument('--isize', type=int, default=32, help='input image size.')
         self.parser.add_argument('--nc', type=int, default=3, help='input image channels')
-        self.parser.add_argument('--nz', type=int, default=100, help='size of the latent z vector')
+        self.parser.add_argument('--nz', type=int, default=128, help='size of the latent z vector')
         self.parser.add_argument('--ngf', type=int, default=64)
         self.parser.add_argument('--ndf', type=int, default=64)
         self.parser.add_argument('--extralayers', type=int, default=0, help='Number of extra layers on gen and disc')
@@ -59,13 +59,19 @@ class Options():
         self.parser.add_argument('--print_freq', type=int, default=100, help='frequency of showing training results on console')
         self.parser.add_argument('--eva_epoch', type=int, default=1,
                                  help='the epoch of evaluation')
-        self.parser.add_argument('--loss_iter', type=int, default=5,
+        self.parser.add_argument('--loss_iter', type=int, default=1,
                                  help='the iteration of saving loss')
         self.parser.add_argument('--nepoch', type=int, default=15, help='number of epochs to train for')
+        self.parser.add_argument('--nenepoch', type=int, default=15, help='number of epochs to train for encoder')
         self.parser.add_argument('--save_best_weight', action='store_false', help='save the weights of the best model')
         self.parser.add_argument('--save_final_weight', action='store_false', help='save the weights of the final model')
+        self.parser.add_argument('--save_best_en_weight', action='store_false', help='save the weights of the best encoder model')
+        self.parser.add_argument('--save_final_en_weight', action='store_false',
+                                 help='save the weights of the final encoder model')
         self.parser.add_argument('--load_best_weights', action='store_true', help='Load the pretrained best weights')
         self.parser.add_argument('--load_final_weights', action='store_true', help='Load the pretrained final weights')
+        self.parser.add_argument('--load_best_en_weights', action='store_true', help='Load the pretrained best encoder weights')
+        self.parser.add_argument('--load_final_en_weights', action='store_true', help='Load the pretrained final encoder weights')
         self.parser.add_argument('--save_train_images', action='store_false', help='save train images')
         self.parser.add_argument('--save_test_images', action='store_false', help='Save test images')
         self.parser.add_argument('--visulize_feature', action='store_false', help='visulize features')

@@ -10,6 +10,7 @@ import functools
 from torch.optim import lr_scheduler
 from torch.nn import init
 import numpy as np
+from torch.nn import functional as F
 
 ##
 def weights_init(mod):
@@ -24,6 +25,44 @@ def weights_init(mod):
     elif classname.find('BatchNorm') != -1:
         mod.weight.data.normal_(1.0, 0.02)
         mod.bias.data.fill_(0)
+
+
+class NetDFC(nn.Module):
+    def __init__(self, opt):
+        super(NetDFC, self).__init__()
+
+        self.model = nn.Sequential(
+            nn.Linear(opt.nz, 1024),
+            nn.LeakyReLU(0.2),
+            nn.Linear(1024, 1024),
+            nn.LeakyReLU(0.2),
+            nn.Linear(1024, 1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        x = self.model(x)
+        return x
+
+
+class NetF(nn.Module):
+    def __init__(self, opt):
+        super(NetF, self).__init__()
+        self.model = nn.Sequential(
+            nn.Linear(opt.nz, 1024),
+            # nn.BatchNorm1d(1024),
+            nn.LeakyReLU(0.2),
+            nn.Linear(1024, 1024),
+            # nn.BatchNorm1d(1024),
+            nn.LeakyReLU(0.2),
+            nn.Linear(1024, opt.nz),
+            nn.LeakyReLU(0.2),
+        )
+
+    def forward(self, x):
+        # x = x.view(x.shape[0], 28 * 28)
+        x = self.model(x)
+        return x
 
 ###
 class Encoder(nn.Module):
@@ -228,6 +267,7 @@ class NetD(nn.Module):
         classifier = classifier.view(-1, 1).squeeze(1)
 
         return classifier, features
+
 
 ##
 class NetG(nn.Module):

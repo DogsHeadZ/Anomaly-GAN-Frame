@@ -17,7 +17,7 @@ import torchvision.utils as vutils
 
 from models.networks import NetG, NetD, weights_init
 from visualizer import Visualizer
-from loss import l2_loss
+from losses import l2_loss
 from evaluate import evaluate
 from models.basemodel import BaseModel
 

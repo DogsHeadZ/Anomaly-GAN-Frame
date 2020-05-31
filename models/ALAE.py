@@ -1,6 +1,7 @@
-from models.networks import NetG, NetD, weights_init
+from models.networks import *
 from evaluate import evaluate
 import visualize
+import losses
 from losses import l2_loss
 import torch
 import torch.optim as optim
@@ -12,28 +13,46 @@ from tqdm import tqdm
 import time
 
 
-class Myganomaly():
+def loss_ed(pred_real, pred_fake):
+    loss = torch.log(1+torch.exp(pred_fake))+torch.log(1+torch.exp(-pred_real))
+    return torch.mean(loss)
+
+
+def loss_fg(pred_fake):
+    loss = torch.log(1+torch.exp(-pred_fake))
+    return torch.mean(loss)
+
+
+def loss_eg(latent_i, latent_o):
+    loss = torch.mean(torch.pow((latent_i - latent_o), 2))
+    return loss
+
+
+class Alae():
 
     @property
     def name(self):
-        return 'Myganomaly'
+        return 'Alae'
 
     def __init__(self, opt, dataloader):
         self.opt = opt
         self.dataloader = dataloader
         self.device = opt.device
-        self.netg = NetG(self.opt).to(self.device)
-        self.netd = NetD(self.opt).to(self.device)
-        self.netg.apply(weights_init)
-        self.netd.apply(weights_init)
+        self.netf = NetF(self.opt).to(self.device)
+        self.decoder = Decoder(opt.isize, opt.nz, opt.nc, opt.ngf, opt.ngpu, opt.extralayers).to(self.device)
+        self.encoder = Encoder(opt.isize, opt.nz, opt.nc, opt.ngf, opt.ngpu, opt.extralayers).to(self.device)
+        self.netd = NetDFC(self.opt).to(self.device)
+        self.decoder.apply(weights_init)
+        self.encoder.apply(weights_init)
 
     def train(self):
         opt = self.opt
-        # device to be finished==================================================
         real_label = torch.ones(size=(opt.batchsize,), dtype=torch.float32, device=self.device)
         fake_label = torch.zeros(size=(opt.batchsize,), dtype=torch.float32, device=self.device)
+        optimizer_f = optim.Adam(self.netf.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+        optimizer_de = optim.Adam(self.decoder.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+        optimizer_en = optim.Adam(self.encoder.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
         optimizer_d = optim.Adam(self.netd.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
-        optimizer_g = optim.Adam(self.netg.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
         l_bce = nn.BCELoss()
         l_adv = l2_loss
         l_con = nn.L1Loss()
@@ -44,73 +63,99 @@ class Myganomaly():
 
         print(f">> Training {self.name} on {opt.dataset} to detect {opt.abnormal_class}")
         best_auc = 0
-        loss_d = []
-        loss_g = []
+        loss_eds = []
+        loss_fgs = []
+        loss_egs = []
         for epoch in range(opt.nepoch):
             iternum = 0
-            running_loss_g = 0.0
-            running_loss_d = 0.0
+            lossed = 0.0
+            lossfg = 0.0
+            losseg = 0.0
+            self.netf.train()
+            self.decoder.train()
+            self.encoder.train()
             self.netd.train()
-            self.netg.train()
             for i, data in enumerate(tqdm(self.dataloader.train, leave=False, total=len(self.dataloader.train), ncols=80)):
                 iternum = iternum + 1
+                data[0].requires_grad = True
                 inputdata = data[0].to(self.device)
-                fake, latent_i, latent_o = self.netg(inputdata)
-                print(latent_i.shape)
-                # update netD
+                z = torch.randn(inputdata.shape[0], opt.nz).to(self.device)
+                latent_i = self.netf(z).unsqueeze(2).unsqueeze(3)
+                fake_image = self.decoder(latent_i)
+                latent_o = self.encoder(fake_image).squeeze()
+                real_latent = self.encoder(inputdata).squeeze()
+                pred_real = self.netd(real_latent)
+                pred_fake = self.netd(latent_o)
+                optimizer_en.zero_grad()
                 optimizer_d.zero_grad()
-                pred_real, feat_real = self.netd(inputdata)
-                pred_fake, feat_fake = self.netd(fake.detach())
-                err_d_real = l_bce(pred_real, real_label)
-                err_d_fake = l_bce(pred_fake, fake_label)
-                err_d = (err_d_real + err_d_fake) * 0.5
-                err_d.backward()
+                loss = loss_ed(pred_real, pred_fake)
+                # loss = losses.discriminator_logistic_simple_gp(pred_fake, pred_real, inputdata)
+                lossed += loss.item()
+                loss.backward()
+                optimizer_en.step()
                 optimizer_d.step()
 
-                # update netG
-                optimizer_g.zero_grad()
-                pred_real, feat_real = self.netd(inputdata)
-                pred_fake, feat_fake = self.netd(fake)
-                err_g_adv = opt.w_adv * l_adv(feat_fake, feat_real)
-                err_g_con = opt.w_con * l_con(fake, inputdata)
-                err_g_lat = opt.w_lat * l_enc(latent_o, latent_i)
-                err_g = err_g_adv + err_g_con + err_g_lat
-                err_g.backward()
-                optimizer_g.step()
+                z = torch.randn(inputdata.shape[0], opt.nz).to(self.device)
+                latent_i = self.netf(z).unsqueeze(2).unsqueeze(3)
+                fake_image = self.decoder(latent_i)
+                latent_o = self.encoder(fake_image).squeeze()
+                pred_fake = self.netd(latent_o)
+                optimizer_f.zero_grad()
+                optimizer_de.zero_grad()
+                loss = loss_fg(pred_fake)
+                # loss = losses.generator_logistic_non_saturating(pred_fake)
+                lossfg += loss.item()
+                loss.backward()
+                optimizer_f.step()
+                optimizer_de.step()
+
+                z = torch.randn(inputdata.shape[0], opt.nz).to(self.device)
+                latent_i = self.netf(z).unsqueeze(2).unsqueeze(3)
+                fake_image = self.decoder(latent_i)
+                latent_o = self.encoder(fake_image).squeeze()
+                optimizer_en.zero_grad()
+                optimizer_de.zero_grad()
+                loss = l2_loss(latent_i, latent_o)
+                # loss = losses.reconstruction(latent_i, latent_o)
+                losseg += loss.item()
+                loss.backward()
+                optimizer_en.step()
+                optimizer_de.step()
 
                 # record loss
-                running_loss_d += err_d.item()
-                running_loss_g += err_g.item()
                 if iternum % opt.loss_iter == 0:
                     # print('GLoss: {:.8f} DLoss: {:.8f}'
                     #       .format(running_loss_g / opt.loss_iter, running_loss_d / opt.loss_iter))
-                    loss_d.append(running_loss_d / opt.loss_iter)
-                    loss_g.append(running_loss_g / opt.loss_iter)
-                    running_loss_d = 0
-                    running_loss_g = 0
+                    loss_eds.append(lossed / opt.loss_iter)
+                    loss_fgs.append(lossfg / opt.loss_iter)
+                    loss_egs.append(losseg / opt.loss_iter)
+                    lossed = 0
+                    lossfg = 0
+                    losseg = 0
 
                 if opt.save_train_images and i == 0:
                     train_img_dst = os.path.join(opt.outtrain_dir, 'images')
-                    visualize.save_images(train_img_dst, epoch, inputdata, fake)
+                    visualize.save_images(train_img_dst, epoch, inputdata, fake_image)
             print(">> Training model %s. Epoch %d/%d" % (self.name, epoch + 1, opt.nepoch))
 
-            if epoch % opt.eva_epoch == 0:
-                performance = self.evaluate(epoch)
-                if performance['AUC'] > best_auc:
-                    best_auc = performance['AUC']
-                    if opt.save_best_weight:
-                        self.save_weights(epoch, is_best=True)
-                # log performance
-                now = time.strftime("%c")
-                traintime = f'================ {now} ================\n'
-                visualize.write_to_log_file(os.path.join(opt.outclass_dir, 'auc.log'), traintime)
-                visualize.log_current_performance(opt.outclass_dir, performance, best_auc)
-                print(performance)
+            # if epoch % opt.eva_epoch == 0:
+            #     performance = self.evaluate(epoch)
+            #     if performance['AUC'] > best_auc:
+            #         best_auc = performance['AUC']
+            #         if opt.save_best_weight:
+            #             self.save_weights(epoch, is_best=True)
+            #     # log performance
+            #     now = time.strftime("%c")
+            #     traintime = f'================ {now} ================\n'
+            #     visualize.write_to_log_file(os.path.join(opt.outclass_dir, 'auc.log'), traintime)
+            #     visualize.log_current_performance(opt.outclass_dir, performance, best_auc)
+            #     print(performance)
         if opt.save_loss_curve:
-            visualize.plot_loss_curve(opt.outclass_dir, 'loss_d', loss_d)
-            visualize.plot_loss_curve(opt.outclass_dir, 'loss_g', loss_g)
-        if opt.save_final_weight:
-            self.save_weights(opt.nepoch, is_best=False)
+            visualize.plot_loss_curve(opt.outclass_dir, 'loss_ed', loss_eds)
+            visualize.plot_loss_curve(opt.outclass_dir, 'loss_fg', loss_fgs)
+            visualize.plot_loss_curve(opt.outclass_dir, 'loss_eg', loss_egs)
+        # if opt.save_final_weight:
+        #     self.save_weights(opt.nepoch, is_best=False)
         print(">> Training model %s.[Done]" % self.name)
 
     def evaluate(self, epoch):
